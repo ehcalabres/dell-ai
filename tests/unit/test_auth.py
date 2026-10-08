@@ -1,11 +1,12 @@
 """Unit tests for authentication functions."""
 
+import subprocess
 from unittest.mock import Mock, patch
 
 import pytest
 from huggingface_hub.utils import GatedRepoError, RepositoryNotFoundError
 
-from dell_ai.auth import check_model_access
+from dell_ai.auth import check_model_access, login_docker
 from dell_ai.exceptions import (
     AuthenticationError,
     GatedRepoAccessError,
@@ -18,6 +19,53 @@ def _mock_hf_response():
     response = Mock()
     response.headers = {}
     return response
+
+
+@patch("dell_ai.auth.shutil.which", return_value="/usr/bin/docker")
+@patch("dell_ai.auth.subprocess.run")
+def test_docker_login_uses_stdin(mock_run, mock_which):
+    token = "hf_docker_test_token"
+    assert login_docker(token, "test-user") is True
+    mock_run.assert_called_once_with(
+        ["docker", "login", "cr.hf.co", "--username", "test-user", "--password-stdin"],
+        input=f"{token}\n",
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert token not in " ".join(mock_run.call_args.args[0])
+    # Registry login is a client operation; no daemon or image pull is invoked.
+    mock_which.assert_called_once_with("docker")
+
+
+@patch("dell_ai.auth.shutil.which", return_value=None)
+@patch("dell_ai.auth.subprocess.run")
+def test_docker_login_skips_missing_cli(mock_run, mock_which):
+    assert login_docker("hf_test", "test-user") is False
+    mock_run.assert_not_called()
+
+
+@pytest.mark.parametrize("failure", ["stderr", "stdout", "os_error"])
+@patch("dell_ai.auth.shutil.which", return_value="/usr/bin/docker")
+@patch("dell_ai.auth.subprocess.run")
+def test_docker_login_errors_redact_token(mock_run, mock_which, failure):
+    token = "hf_docker_secret"
+    detail = f"Credential helper rejected {token}"
+    if failure == "os_error":
+        mock_run.side_effect = OSError(detail)
+    else:
+        mock_run.side_effect = subprocess.CalledProcessError(
+            1,
+            ["docker", "login"],
+            stderr=detail if failure == "stderr" else None,
+            output=detail if failure == "stdout" else None,
+        )
+    with pytest.raises(AuthenticationError) as error:
+        login_docker(token, "test-user")
+    assert "HF token is saved" in str(error.value)
+    assert "cr.hf.co" in str(error.value)
+    assert "[REDACTED]" in str(error.value)
+    assert token not in str(error.value)
 
 
 def test_check_model_access_success():

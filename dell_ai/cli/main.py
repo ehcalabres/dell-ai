@@ -103,15 +103,21 @@ def auth_login(
     token: Optional[str] = typer.Option(
         None,
         "--token",
-        help="Hugging Face API token. If not provided, you will be prompted to enter it.",
+        help="Hugging Face API token. Defaults to HF_TOKEN, or prompts if unset.",
+    ),
+    docker: bool = typer.Option(
+        True,
+        "--docker/--no-docker",
+        help="Also authenticate Docker to cr.hf.co with the same token.",
     ),
 ) -> None:
     """
-    Log in to Dell AI using a Hugging Face token.
+    Log in to Hugging Face and configure Docker credentials for cr.hf.co.
 
-    If no token is provided, you will be prompted to enter it. You can get a token from:
+    Uses --token or HF_TOKEN, or prompts if neither is provided. Get a token from:
     https://huggingface.co/settings/tokens
     """
+    token = token or os.environ.get("HF_TOKEN")
     if not token:
         typer.echo(
             "You can get a token from https://huggingface.co/settings/tokens\n"
@@ -123,6 +129,11 @@ def auth_login(
         auth.login(token)
         user_info = auth.get_user_info(token)
         typer.echo(f"Successfully logged in as {user_info.get('name', 'Unknown')}")
+        if docker:
+            if auth.login_docker(token, user_info.get("name", "")):
+                typer.echo("Docker authenticated to cr.hf.co")
+            else:
+                typer.echo("Docker CLI not found; skipped Docker registry login.")
     except AuthenticationError as e:
         typer.echo(f"Error: {str(e)}", err=True)
         raise typer.Exit(code=1)

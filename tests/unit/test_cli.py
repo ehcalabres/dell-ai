@@ -22,8 +22,10 @@ def runner():
 
 
 @pytest.fixture
-def mock_auth():
+def mock_auth(monkeypatch):
     """Fixture that mocks the authentication module."""
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    monkeypatch.setattr("dell_ai.cli.main.env.load_all_env_to_os", lambda: None)
     with patch("dell_ai.cli.main.auth") as mock:
         yield mock
 
@@ -51,6 +53,8 @@ def test_auth_login_with_token(runner, mock_auth):
     assert "Successfully logged in as Test User" in result.output
     mock_auth.login.assert_called_once_with("test-token")
     mock_auth.get_user_info.assert_called_once_with("test-token")
+    mock_auth.login_docker.assert_called_once_with("test-token", "Test User")
+    assert "Docker authenticated to cr.hf.co" in result.output
 
 
 def test_auth_login_interactive(runner, mock_auth):
@@ -82,6 +86,56 @@ def test_auth_login_error(runner, mock_auth):
     assert result.exit_code == 1
     assert "Error: Invalid token" in result.output
     mock_auth.login.assert_called_once_with("invalid-token")
+    mock_auth.login_docker.assert_not_called()
+
+
+def test_auth_login_from_environment(runner, mock_auth, monkeypatch):
+    monkeypatch.setenv("HF_TOKEN", "hf_env_token")
+    mock_auth.get_user_info.return_value = {"name": "env-user"}
+    with patch("typer.prompt") as prompt:
+        result = runner.invoke(app, ["login"])
+    assert result.exit_code == 0
+    prompt.assert_not_called()
+    mock_auth.login.assert_called_once_with("hf_env_token")
+    mock_auth.login_docker.assert_called_once_with("hf_env_token", "env-user")
+
+
+def test_auth_login_explicit_token_overrides_environment(
+    runner, mock_auth, monkeypatch
+):
+    monkeypatch.setenv("HF_TOKEN", "hf_env_token")
+    mock_auth.get_user_info.return_value = {"name": "explicit-user"}
+    result = runner.invoke(app, ["login", "--token", "hf_explicit_token"])
+    assert result.exit_code == 0
+    mock_auth.login.assert_called_once_with("hf_explicit_token")
+    mock_auth.login_docker.assert_called_once_with("hf_explicit_token", "explicit-user")
+
+
+def test_auth_login_without_docker(runner, mock_auth):
+    mock_auth.get_user_info.return_value = {"name": "test-user"}
+    result = runner.invoke(app, ["login", "--token", "test-token", "--no-docker"])
+    assert result.exit_code == 0
+    mock_auth.login_docker.assert_not_called()
+
+
+def test_auth_login_skips_missing_docker(runner, mock_auth):
+    mock_auth.get_user_info.return_value = {"name": "test-user"}
+    mock_auth.login_docker.return_value = False
+    result = runner.invoke(app, ["login", "--token", "test-token"])
+    assert result.exit_code == 0
+    assert "Docker CLI not found; skipped Docker registry login" in result.output
+
+
+def test_auth_login_reports_partial_failure(runner, mock_auth):
+    mock_auth.get_user_info.return_value = {"name": "test-user"}
+    mock_auth.login_docker.side_effect = AuthenticationError(
+        "The HF token is saved, but Docker login to cr.hf.co failed: access denied"
+    )
+    result = runner.invoke(app, ["login", "--token", "test-token"])
+    assert result.exit_code == 1
+    assert "Successfully logged in as test-user" in result.output
+    assert "HF token is saved, but Docker login" in result.output
+    mock_auth.login.assert_called_once_with("test-token")
 
 
 def test_auth_logout_confirmed(runner, mock_auth):

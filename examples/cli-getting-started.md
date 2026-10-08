@@ -18,10 +18,15 @@ This guide demonstrates the major functionality of the Dell AI CLI, including:
 ### Login
 ```bash
 dell-ai login
-# You'll be prompted to enter your Hugging Face token
+# Uses HF_TOKEN if set; otherwise prompts for your Hugging Face token
 # or use --token flag to provide it directly
 dell-ai login --token <your_token>
 ```
+
+Login saves the HF token and also authenticates Docker to `cr.hf.co` with your
+HF username and token. Docker saves credentials through its configured credential
+helper/store. Use `dell-ai login --no-docker` for HF authentication only. If Docker
+is not installed, login reports that Docker authentication was skipped.
 
 ### Check Authentication Status
 ```bash
@@ -32,6 +37,8 @@ dell-ai whoami
 ```bash
 dell-ai logout
 ```
+
+To also remove Docker's saved registry credentials, run `docker logout cr.hf.co`.
 
 ## 2. Models
 

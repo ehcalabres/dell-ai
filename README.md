@@ -72,7 +72,7 @@ For detailed, guided examples of using the Dell AI SDK and CLI, check out the ex
 ### Using the CLI
 
 ```bash
-# Authenticate with Hugging Face
+# Authenticate with Hugging Face and configure Docker credentials for cr.hf.co
 dell-ai login
 
 # List available models
@@ -147,7 +147,13 @@ Deployment uses the locally available engine: `docker` (Docker CLI), `kubernetes
 Docker deployments support both DEH registries. Images from
 `registry.dell.huggingface.co` use Docker's normal pull behavior. Images from
 `cr.hf.co` are pulled with `hf image pull` before Docker starts the container.
-Run `dell-ai login` first: the token saved by login (or an `HF_TOKEN` environment
+Run `dell-ai login` first: it uses `--token`, `HF_TOKEN`, or a hidden prompt,
+saves the token in the Hugging Face token cache, and authenticates Docker to
+`cr.hf.co` using your HF username and the token through `--password-stdin`.
+Docker credentials are saved by Docker's configured credential helper/store.
+If Docker is not installed, HF login still succeeds and reports that Docker
+login was skipped. Use `dell-ai login --no-docker` to authenticate only to HF.
+The token saved by login (or an `HF_TOKEN` environment
 variable or SDK token) is passed to the pull process as `HF_TOKEN`.
 The Hugging Face CLI (`hf`) must be available; `dell-ai` automatically runs
 `hf extensions install hf-image` if the extension is missing. The extension

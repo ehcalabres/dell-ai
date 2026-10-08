@@ -1,6 +1,8 @@
 """Authentication functionality for the Dell AI SDK."""
 
 import os
+import shutil
+import subprocess
 from typing import Any, Dict, Optional
 
 from huggingface_hub import auth_check as hf_auth_check
@@ -10,6 +12,7 @@ from huggingface_hub import whoami
 from huggingface_hub.errors import GatedRepoError, RepositoryNotFoundError
 from huggingface_hub.utils import get_token as hf_get_token
 
+from dell_ai.container_images import XET_REGISTRY
 from dell_ai.exceptions import (
     AuthenticationError,
     GatedRepoAccessError,
@@ -48,6 +51,44 @@ def login(token: str) -> None:
         hf_login(token=token)
     except Exception as e:
         raise AuthenticationError(f"Failed to login: {str(e)}")
+
+
+def login_docker(token: str, username: str) -> bool:
+    """Save the HF token in Docker's credential store for cr.hf.co.
+
+    Returns False when Docker is not installed. Docker login does not require
+    a running daemon and respects the user's DOCKER_CONFIG/credential helper.
+    """
+    if not shutil.which("docker"):
+        return False
+    if not token or not username:
+        raise AuthenticationError(
+            "A Hugging Face token and username are required for Docker login."
+        )
+    try:
+        subprocess.run(
+            [
+                "docker",
+                "login",
+                XET_REGISTRY,
+                "--username",
+                username,
+                "--password-stdin",
+            ],
+            input=f"{token}\n",
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except (subprocess.CalledProcessError, OSError) as exc:
+        detail = str(exc)
+        if isinstance(exc, subprocess.CalledProcessError):
+            detail = exc.stderr or exc.stdout or detail
+        detail = detail.strip().replace(token, "[REDACTED]")
+        raise AuthenticationError(
+            f"The HF token is saved, but Docker login to {XET_REGISTRY} failed: {detail}"
+        ) from exc
+    return True
 
 
 def logout() -> None:
