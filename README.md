@@ -144,6 +144,17 @@ local node, so the code you get from the Dell Enterprise Hub is deployed for you
 Deployment uses the locally available engine: `docker` (Docker CLI), `kubernetes`
 (`kubectl apply`), or Helm for applications.
 
+Docker deployments support both DEH registries. Images from
+`registry.dell.huggingface.co` use Docker's normal pull behavior. Images from
+`cr.hf.co` are pulled with `hf image pull` before Docker starts the container.
+Run `dell-ai login` first: the token saved by login (or an `HF_TOKEN` environment
+variable or SDK token) is passed to the pull process as `HF_TOKEN`.
+The Hugging Face CLI (`hf`) must be available; `dell-ai` automatically runs
+`hf extensions install hf-image` if the extension is missing. The extension
+requires Docker's containerd image store; see the
+[hf-image requirements](https://github.com/huggingface/hf-image#requirements).
+Kubernetes and Helm continue to use their engine's registry pull configuration.
+
 By default deployments run in detached/background mode. For Docker, the
 interactive flags (`-it`) are automatically converted to detached mode (`-d`),
 the container ID is captured, and the inferred endpoint URL is recorded.

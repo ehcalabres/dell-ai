@@ -8,7 +8,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-DEH_IMAGE_PREFIX = "registry.dell.huggingface.co/enterprise-dell-inference-"
+from dell_ai.container_images import LEGACY_REGISTRY, XET_REGISTRY
+
+DEH_IMAGE_PREFIX = f"{LEGACY_REGISTRY}/enterprise-dell-inference-"
 
 
 def get_global_deployments_path() -> Path:
@@ -84,8 +86,8 @@ def _discover_docker_deployments() -> Dict[str, Dict[str, Any]]:
     """
     Scan running Docker containers for DEH images not tracked in the registry.
 
-    Identifies containers whose image starts with DEH_IMAGE_PREFIX and returns
-    their metadata keyed by the image slug (image name with prefix and tag stripped).
+    Identifies legacy DEH images, Dell-tagged Xet images, and tracked Xet
+    containers. Returns metadata keyed by the image name without its tag.
     """
     if not shutil.which("docker"):
         return {}
@@ -102,6 +104,15 @@ def _discover_docker_deployments() -> Dict[str, Dict[str, Any]]:
     except Exception:
         return {}
 
+    tracked = {
+        **load_deployments_file(get_global_deployments_path()),
+        **load_deployments_file(get_local_deployments_path()),
+    }
+    tracked_ids = {
+        meta["container_id"][:12]
+        for meta in tracked.values()
+        if meta.get("container_id")
+    }
     discovered: Dict[str, Dict[str, Any]] = {}
     for line in proc.stdout.strip().splitlines():
         if not line.strip():
@@ -112,10 +123,17 @@ def _discover_docker_deployments() -> Dict[str, Dict[str, Any]]:
             continue
 
         image = container.get("Image", "")
-        if not image.startswith(DEH_IMAGE_PREFIX):
-            continue
-
         container_id = container.get("ID", "")
+        is_legacy = image.startswith(DEH_IMAGE_PREFIX)
+        is_xet = image.startswith(f"{XET_REGISTRY}/")
+        tag = image.rsplit(":", 1)[-1] if ":" in image and "@" not in image else ""
+        if not (
+            is_legacy
+            or (
+                is_xet and (tag.startswith("dell-") or container_id[:12] in tracked_ids)
+            )
+        ):
+            continue
 
         # Parse first exposed host port: "0.0.0.0:8080->80/tcp, ..." → 8080
         ports_str = container.get("Ports", "")
@@ -125,7 +143,8 @@ def _discover_docker_deployments() -> Dict[str, Dict[str, Any]]:
             endpoint = f"http://localhost:{port_match.group(1)}"
 
         # Deployment ID based on image + unique identifier.
-        slug = image[len(DEH_IMAGE_PREFIX) :].split(":")[0]
+        prefix = DEH_IMAGE_PREFIX if is_legacy else f"{XET_REGISTRY}/"
+        slug = image[len(prefix) :].split("@", 1)[0].split(":", 1)[0]
         unique_slug = slug
         counter = 1
         while unique_slug in discovered:

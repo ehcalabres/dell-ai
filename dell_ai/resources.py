@@ -6,6 +6,7 @@ degrade gracefully when neither tool is present.
 """
 
 import re
+import shlex
 import shutil
 import socket
 import subprocess
@@ -324,13 +325,17 @@ def inject_host_port(snippet: str, port: int) -> str:
 
 # Matches the DEH image reference and stops at whitespace or quotes, so it works
 # for bare Docker image args and quoted/unquoted Kubernetes manifest values alike.
-_DEH_IMAGE_RE = re.compile(r"registry\.dell\.huggingface\.co/[^\s\"']+")
+_DEH_IMAGE_RE = re.compile(r"(?:registry\.dell\.huggingface\.co|cr\.hf\.co)/[^\s\"']+")
+_DOCKER_DEH_IMAGE_RE = re.compile(
+    r"(?<!\S)(?P<quote>[\"']?)(?:registry\.dell\.huggingface\.co|cr\.hf\.co)/"
+    r"[^\s\"']+(?P=quote)"
+)
 
 
 def inject_image_tag(snippet: str, tag: str) -> str:
     """Set the tag on every DEH container image reference in the snippet.
 
-    The Dell Enterprise Hub image (``registry.dell.huggingface.co/...``) is
+    The Dell Enterprise Hub image (from the legacy registry or ``cr.hf.co``) is
     returned untagged by the API. This appends ``:tag``, replacing an existing
     tag if one is present. Works for both Docker commands and Kubernetes
     manifests, and updates every occurrence so all references stay consistent.
@@ -339,7 +344,7 @@ def inject_image_tag(snippet: str, tag: str) -> str:
     def _set_tag(match: "re.Match[str]") -> str:
         image = match.group(0)
         # The registry host carries no port, so any ':' present is an existing tag.
-        base = image.split(":", 1)[0]
+        base = image.split("@", 1)[0].split(":", 1)[0]
         return f"{base}:{tag}"
 
     return _DEH_IMAGE_RE.sub(_set_tag, snippet)
@@ -355,9 +360,9 @@ CONTAINER_HF_CACHE_PATH = "/root/.cache/huggingface"
 
 def _inject_volume_mount(snippet: str, host_path: str, container_path: str) -> str:
     """Insert ``-v host_path:container_path`` before the DEH image reference."""
-    return re.sub(
-        r"(registry\.dell\.huggingface\.co/\S+)",
-        f"-v {host_path}:{container_path} " + r"\1",
+    volume = shlex.quote(f"{host_path}:{container_path}")
+    return _DOCKER_DEH_IMAGE_RE.sub(
+        lambda match: f"-v {volume} {match.group(0)}",
         snippet,
         count=1,
     )
@@ -399,9 +404,8 @@ def inject_hf_cache_dir(snippet: str, hf_cache_dir: str) -> str:
         return snippet
     abs_dir = str(Path(hf_cache_dir).resolve())
     snippet = _inject_volume_mount(snippet, abs_dir, CONTAINER_HF_CACHE_PATH)
-    return re.sub(
-        r"(registry\.dell\.huggingface\.co/\S+)",
-        f"-e HF_HUB_CACHE={CONTAINER_HF_CACHE_PATH} " + r"\1",
+    return _DOCKER_DEH_IMAGE_RE.sub(
+        lambda match: f"-e HF_HUB_CACHE={CONTAINER_HF_CACHE_PATH} {match.group(0)}",
         snippet,
         count=1,
     )

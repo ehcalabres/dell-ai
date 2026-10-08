@@ -16,6 +16,45 @@ from dell_ai.exceptions import AuthenticationError
 runner = CliRunner()
 
 
+@pytest.mark.parametrize("pull_succeeds", [True, False])
+def test_xet_model_deployment_tracks_only_successful_pulls(
+    mock_subprocess_run, temp_env_files, monkeypatch, pull_succeeds
+):
+    image = "cr.hf.co/hf-rev/nvidia-nemotron-3-diarization-pr:dell-gpu-latest-pr261"
+    monkeypatch.setattr(
+        "dell_ai.container_images.shutil.which", lambda name: f"/bin/{name}"
+    )
+    client = DellAIClient(token="mock_token")
+    monkeypatch.setattr(
+        client, "get_deployment_snippet", lambda **kwargs: f"docker run {image}"
+    )
+
+    def execute(command, **kwargs):
+        if command == ["hf", "image", "pull", image] and not pull_succeeds:
+            raise subprocess.CalledProcessError(
+                1, command, stderr="Image access denied"
+            )
+        return subprocess.CompletedProcess(
+            command, 0, stdout="xet-container-id\n", stderr=""
+        )
+
+    mock_subprocess_run.side_effect = execute
+    result = client.deploy_model(
+        model_id="nvidia/model", platform_id="xe9680", engine="docker", num_gpus=1
+    )
+    assert result["success"] is pull_succeeds
+    persisted = deployments.load_deployments_file(
+        deployments.get_local_deployments_path()
+    )
+    if pull_succeeds:
+        assert persisted["nvidia/model"]["container_id"] == "xet-container-id"
+        assert mock_subprocess_run.call_count == 3
+    else:
+        assert persisted == {}
+        assert "Image access denied" in result["error"]
+        assert mock_subprocess_run.call_count == 2
+
+
 @pytest.fixture
 def mock_subprocess_run():
     """Fixture to mock subprocess.run."""

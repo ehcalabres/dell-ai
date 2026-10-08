@@ -660,7 +660,24 @@ class DellAIClient:
         import shlex
         import subprocess
 
+        from dell_ai import container_images
+
         snippet_stripped = snippet.strip()
+
+        is_docker_run = "docker run" in snippet_stripped
+        image = (
+            container_images.get_registry_image(snippet_stripped)
+            if is_docker_run
+            else None
+        )
+        is_xet_image = bool(
+            image and image.startswith(f"{container_images.XET_REGISTRY}/")
+        )
+        if is_xet_image and not self.token:
+            raise AuthenticationError(
+                "Pulling images from cr.hf.co requires a Hugging Face token. "
+                "Run `dell-ai login` before deploying."
+            )
 
         # Use the same resolved token as API requests and model access checks.
         if "$$_TOKEN_$$" in snippet_stripped:
@@ -721,6 +738,37 @@ class DellAIClient:
                 cmd = shlex.join(tokens)
 
             try:
+                if is_xet_image:
+                    tokens = shlex.split(cmd)
+                    image_index = tokens.index(image)
+                    platform = None
+                    for index, arg in enumerate(tokens[:image_index]):
+                        if arg.startswith("--platform="):
+                            platform = arg.split("=", 1)[1]
+                        elif arg == "--platform" and index + 1 < image_index:
+                            platform = tokens[index + 1]
+                    container_images.pull_xet_image(image, self.token, platform)
+                    # The image is now local. Prevent Docker flags such as
+                    # --pull=always from bypassing the authenticated HF pull.
+                    run_index = tokens.index("run")
+                    run_options = tokens[run_index + 1 : image_index]
+                    options = []
+                    skip_value = False
+                    for arg in run_options:
+                        if skip_value:
+                            skip_value = False
+                        elif arg == "--pull":
+                            skip_value = True
+                        elif not arg.startswith("--pull="):
+                            options.append(arg)
+                    tokens = (
+                        tokens[: run_index + 1]
+                        + ["--pull=never"]
+                        + options
+                        + tokens[image_index:]
+                    )
+                    cmd = shlex.join(tokens)
+
                 # For detached docker run, we capture output to get the container ID
                 if is_docker_run_detach:
                     proc = subprocess.run(
